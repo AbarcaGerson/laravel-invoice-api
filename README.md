@@ -1,59 +1,151 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Laravel Invoice API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Business API for creating invoices and preparing them for async processing.
 
-## About Laravel
+## Responsibility
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+This service owns invoice creation and invoice status.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+It will eventually:
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+1. Receive invoice creation requests.
+2. Save invoices and invoice items in MySQL.
+3. Publish an `invoice.created` message to SQS.
+4. Respond quickly with a `pending` invoice status.
+5. Expose endpoints to check invoice status.
 
-## Learning Laravel
+It does not generate files and it does not store files in S3 directly. Those responsibilities belong to the future worker and the existing storage API.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Local Services
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+| Service | Container | Host Port | Internal Host |
+| --- | --- | --- | --- |
+| Laravel API | `invoice_api` | `8002` | `api:8000` |
+| MySQL | `invoice_api_mysql` | `3309` | `db:3306` |
 
-## Laravel Sponsors
+## First Setup
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```bash
+cp .env.example .env
+docker compose up --build -d
+docker compose exec api php artisan key:generate
+docker compose exec api php artisan migrate
+```
 
-### Premium Partners
+Then open:
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+```text
+http://localhost:8002
+```
 
-## Contributing
+## API Endpoints
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Health check:
 
-## Code of Conduct
+```http
+GET /api/health
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+List invoices:
 
-## Security Vulnerabilities
+```http
+GET /api/invoices
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Create invoice:
 
-## License
+```http
+POST /api/invoices
+Content-Type: application/json
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Request body:
+
+```json
+{
+  "document_type": "01",
+  "operation_type": "0101",
+  "series": "F001",
+  "number": 1,
+  "issue_date": "2026-07-29",
+  "due_date": "2026-08-05",
+  "customer_document_type": "6",
+  "customer_document_number": "20123456789",
+  "customer_name": "Cliente Demo SAC",
+  "customer_email": "cliente@example.com",
+  "currency": "PEN",
+  "items": [
+    {
+      "product_code": "SERV-001",
+      "description": "Servicio de consulta veterinaria",
+      "unit_code": "NIU",
+      "quantity": 2,
+      "unit_price": 100,
+      "tax_affectation_type": "10"
+    },
+    {
+      "product_code": "PROD-001",
+      "description": "Producto demo",
+      "unit_code": "NIU",
+      "quantity": 1,
+      "unit_price": 50,
+      "tax_affectation_type": "10"
+    }
+  ]
+}
+```
+
+The API calculates invoice totals from the item lines. Clients do not send `taxable_amount`, `igv_amount` or `total_amount`.
+
+Show invoice:
+
+```http
+GET /api/invoices/{id}
+```
+
+## Invoice Header Fields
+
+| Field | Purpose |
+| --- | --- |
+| `document_type` | Electronic document type. `01` invoice, `03` receipt, `07` credit note, `08` debit note |
+| `operation_type` | SUNAT/Greenter operation type. Default `0101` |
+| `series` / `number` | Document numbering |
+| `issue_date` / `due_date` | Document dates |
+| `customer_document_type` | Customer document type. Example: `6` for RUC |
+| `customer_document_number` | Customer document number |
+| `taxable_amount` | Calculated taxable base |
+| `igv_amount` | Calculated IGV amount |
+| `total_amount` | Calculated document total |
+
+## Invoice Statuses
+
+| Status | Meaning |
+| --- | --- |
+| `pending` | Invoice was created and is waiting for async processing |
+| `processing` | Worker is processing the invoice |
+| `processed` | Worker finished and stored the generated file |
+| `failed` | Worker failed to process the invoice |
+
+## Architecture Direction
+
+Current repositories:
+
+| Repository | Role |
+| --- | --- |
+| `laravel-floci-s3-lab` | Storage API / S3 lab |
+| `laravel-aws-sqs-lab` | SQS learning lab |
+| `laravel-invoice-api` | Business API for invoices |
+
+Next repository planned:
+
+| Repository | Role |
+| --- | --- |
+| `laravel-invoice-worker` | Background worker that consumes SQS and calls the storage API |
+
+## Current Status
+
+- Laravel 12 base project is pushed.
+- Docker services are configured.
+- MySQL environment variables are prepared.
+- Invoice header, items, service, controller and API routes are ready.
+- SQS publishing is pending.

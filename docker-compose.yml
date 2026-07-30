@@ -1,0 +1,42 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: invoice_api
+    ports:
+      - "8002:8000"
+    volumes:
+      - .:/var/www/html
+      - /var/www/html/vendor
+    environment:
+      APP_ENV: local
+      APP_DEBUG: true
+    depends_on:
+      - db
+    networks:
+      - invoice_api_network
+
+  db:
+    image: mysql:8.4
+    container_name: invoice_api_mysql
+    restart: unless-stopped
+    ports:
+      - "3309:3306"
+    environment:
+      MYSQL_DATABASE: invoice_api
+      MYSQL_USER: laravel
+      MYSQL_PASSWORD: secret
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - invoice_api_network
+
+networks:
+  invoice_api_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
